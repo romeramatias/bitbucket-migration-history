@@ -5,18 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 REPO_PATH=""
-DATA_PATH="$PROJECT_ROOT/data/random-days.json"
+DATA_PATH="$PROJECT_ROOT/data/bitbucket-commit-days-extraction.json"
 DRY_RUN=false
 BATCH_SIZE=500
+PUSH_DELAY=5
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") --repo <path> [--data <path>] [--batch <size>] [--dry-run]
+Usage: $(basename "$0") --repo <path> [--data <path>] [--batch <size>] [--delay <secs>] [--dry-run]
 
 Options:
   --repo <path>    Path to the Git repository where commits will be created (required)
   --data <path>    Path to the JSON file (default: data/commit-days.json)
   --batch <size>   Push every N commits (default: 500, 0 = push only at end)
+  --delay <secs>   Seconds to wait after each push (default: 5)
   --dry-run        Show what would be done without executing commits
   -h, --help       Show this help message
 EOF
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --batch)
       BATCH_SIZE="$2"
+      shift 2
+      ;;
+    --delay)
+      PUSH_DELAY="$2"
       shift 2
       ;;
     --dry-run)
@@ -87,6 +93,7 @@ echo "Data:    $DATA_PATH"
 echo "Days:    $TOTAL_DAYS"
 echo "Commits: $TOTAL_COMMITS"
 echo "Batch:   $BATCH_SIZE (0 = push at end)"
+echo "Delay:   ${PUSH_DELAY}s after each push"
 echo "Dry run: $DRY_RUN"
 echo "========================"
 
@@ -115,8 +122,12 @@ for i in $(seq 0 $((TOTAL_DAYS - 1))); do
   DAY_NUM=$((i + 1))
 
   if $DRY_RUN; then
-    echo "[$DAY_NUM/$TOTAL_DAYS] $DATE — $QUANTITY commits"
     COMMITS_DONE=$((COMMITS_DONE + QUANTITY))
+    echo "[$DAY_NUM/$TOTAL_DAYS] $DATE — $QUANTITY commits (total: $COMMITS_DONE/$TOTAL_COMMITS)"
+    if [[ "$BATCH_SIZE" -gt 0 ]] && (( COMMITS_DONE % BATCH_SIZE < QUANTITY )) && (( COMMITS_DONE >= BATCH_SIZE )); then
+      BATCH_NUM=$((COMMITS_DONE / BATCH_SIZE))
+      echo "  >> [DRY RUN] Would push batch #$BATCH_NUM (at commit $((BATCH_NUM * BATCH_SIZE))/$TOTAL_COMMITS) and wait ${PUSH_DELAY}s"
+    fi
     continue
   fi
 
@@ -142,16 +153,21 @@ for i in $(seq 0 $((TOTAL_DAYS - 1))); do
     COMMITS_DONE=$((COMMITS_DONE + 1))
 
     if [[ "$BATCH_SIZE" -gt 0 ]] && (( COMMITS_DONE % BATCH_SIZE == 0 )); then
-      echo "  >> Pushing batch (commit $COMMITS_DONE/$TOTAL_COMMITS)..."
+      BATCH_NUM=$((COMMITS_DONE / BATCH_SIZE))
+      echo "  >> Pushing batch #$BATCH_NUM ($COMMITS_DONE/$TOTAL_COMMITS)..."
       git push --quiet
+      echo "  >> Waiting ${PUSH_DELAY}s before next batch..."
+      sleep "$PUSH_DELAY"
     fi
   done
 
   echo "[$DAY_NUM/$TOTAL_DAYS] $DATE — $QUANTITY commits (total: $COMMITS_DONE/$TOTAL_COMMITS)"
 done
 
+TOTAL_PUSHES=$(( BATCH_SIZE > 0 ? (COMMITS_DONE / BATCH_SIZE) + 1 : 1 ))
+
 echo ""
-echo "Done! $COMMITS_DONE commits created."
+echo "Done! $COMMITS_DONE commits created in $TOTAL_PUSHES pushes."
 
 if ! $DRY_RUN; then
   echo "Pushing remaining commits..."
